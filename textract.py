@@ -1,55 +1,71 @@
 import boto3
 import json
 
-def textract_parser(s3_bucket, s3_key, queries):
+def textract_parser(s3_bucket, s3_key):
     textract = boto3.client('textract', region_name='us-east-2')
 
-    # call Textract with queries
+    doc_type_query = [{"Text": "What is the document type, is it a resume, diploma, certificate, driver's license, or other?"}]
+
+    response = textract.analyze_document(
+        Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}},
+        FeatureTypes=["QUERIES"],
+        QueriesConfig={"Queries": doc_type_query}
+    )
+
+    doc_type = "document" 
+    doc_type_confidence = 0.0
+    for block in response.get('Blocks', []):
+        if block.get('BlockType') == 'QUERY_RESULT':
+            doc_type = block.get('Text', "").lower()
+            doc_type_confidence = block.get('Confidence', 0.0)
+
+    # store document type and confidence
+    results = [
+        {
+            "Text": doc_type_query[0]["Text"],
+            "Answer": doc_type,
+            "Confidence": doc_type_confidence
+        }
+    ]
+
+    # generate queries based on document type
+    queries = [
+        {"Text": f"What is the name of this {doc_type}?"},
+        {"Text": f"What is the expiration date of this {doc_type}?"},
+        {"Text": f"What state is this {doc_type} from?"},
+        {"Text": "Are there any important comments?"}
+    ]
+
+    # run textract with updated queries
     response = textract.analyze_document(
         Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}},
         FeatureTypes=["QUERIES"],
         QueriesConfig={"Queries": queries}
     )
 
-    query_results = []
-    confidence = []
-    query_texts = [query["Text"] for query in queries]  # store questions in order
+    # store query results
+    query_results = {query["Text"]: {"Answer": "", "Confidence": 0.0} for query in queries}
 
-    """
     for block in response.get('Blocks', []):
         if block.get('BlockType') == 'QUERY_RESULT':
-            print(block)
-    """
-    # look for block with QUERY_RESULT type and store the answer
-    for block in response.get('Blocks', []):
-        if block.get('BlockType') == 'QUERY_RESULT':
+            question_text = queries[len(query_results) - len(queries)]["Text"]
+            query_results[question_text] = {
+                "Answer": block.get('Text', ""),
+                "Confidence": block.get('Confidence', 0.0)
+            }
 
-            # if confidence isn't high enough, leave answer blank
-            conf_level = block.get('Confidence', 0)
-            res_text = block.get('Text', "")
-            if conf_level > 90:
-                query_results.append(res_text)
-            else:
-                query_results.append("")
-            confidence.append(conf_level)
+    # convert to json format
+    for query in queries:
+        results.append({
+            "Text": query["Text"],
+            "Answer": query_results[query["Text"]]["Answer"],
+            "Confidence": query_results[query["Text"]]["Confidence"]
+        })
 
-    # merge answers into the original query JSON format
-    for i in range(len(queries)):
-        queries[i]["Answer"] = query_results[i] if i < len(query_results) else ""
-        queries[i]["Confidence"] = confidence[i] if i < len(confidence) else 0
-
-    return(json.dumps(queries, indent=4))
+    return json.dumps(results, indent=4)
 
 s3_bucket = "billiaitest"
-s3_key = "diploma.jpg"
+s3_key = "image.png"
 
-queries = [
-        {"Text": "What is the document type?"},
-        {"Text": "What is the name of the document?"},
-        {"Text": "What is the expiration date?"},
-        {"Text": "What state is the document from?"},
-        {"Text": "Are there any important comments?"}
-]
-
-result = textract_parser(s3_bucket, s3_key, queries)
+result = textract_parser(s3_bucket, s3_key)
 print(result)
