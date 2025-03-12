@@ -1,32 +1,86 @@
 import boto3
 import json
 
-# Initialize Bedrock client
-bedrock = boto3.client(service_name="bedrock-runtime", region_name="us-east-2")
+# AWS Clients
+textract_client = boto3.client("textract", region_name="us-east-2")  # Textract for OCR
+bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-2")  # Nova Lite for summarization
 
-# Define input text
-prompt = "Summarize this: It could not have been ten seconds, and yet it seemed a long time that their hands were clasped together.  He had time to learn every detail of her hand.  He explored the long fingers, the shapely nails, the work-hardened palm with its row of callouses, the smooth flesh under the wrist.  Merely from feeling it he would have known it by sight.  In the same instant it occurred to him that he did not know what colour the girl's eyes were.  They were probably brown, but people with dark hair sometimes had blue eyes.  To turn his head and look at her would have been inconceivable folly.  With hands locked together, invisible among the press of bodies, they stared steadily in front of them, and instead of the eyes of the girl, the eyes of the aged prisoner gazed mournfully at Winston out of nests of hair."
+MODEL_ID = "us.amazon.nova-lite-v1:0"
 
-# inference_profile_id = "us.anthropic.claude-3-haiku-20240307-v1:0"
-modelID = "meta.llama3-3-70b-instruct-v1:0"
+system = [{ "text": "You are an AI assistant that can summarize and create names for documents." }]
 
-# Set up the payload
-body = json.dumps({
-    "prompt": prompt,
-    "max_gen_len": 200,
-    "temperature": 0.5,
-    "top_p": 1.0,
-})
+# Define S3 bucket and object key
+s3_bucket = "billiaitest"  # Replace with your actual bucket name
+s3_key = "diploma.jpg"  # Replace with the actual S3 object key
 
-accept="application/json"
-contentType = "application/json"
+def extract_text_from_image_s3(bucket, key):
+    """Uses Amazon Textract to extract text from an image in S3."""
+    try:
+        response = textract_client.analyze_document(
+            Document={"S3Object": {"Bucket": bucket, "Name": key}},
+            FeatureTypes=["TABLES", "FORMS"]
+        )
+        
+        extracted_text = []
+        for block in response["Blocks"]:
+            if block["BlockType"] == "LINE":
+                extracted_text.append(block["Text"])
+        
+        return "\n".join(extracted_text)
+    
+    except Exception as e:
+        print("Error in Textract OCR:", e)
+        return ""
 
-# Invoke Claude 3 Haiku (200k version)
-response = bedrock.invoke_model(
-    modelId = modelID,
-    body = body,
-    accept = accept,
-    contentType = contentType
-)
+def send_request_nova(text_content, request_type):
+    """Send extracted text to Amazon Nova Lite for summarization or title generation."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"text": text_content},
+                {"text": f"Please {request_type} the document."}
+            ],
+        }
+    ]
 
-print(json.loads(response.get('body').read()))
+    inf_params = {
+        "maxTokens": 150, 
+        "topP": 0.2, 
+        "topK": 20, 
+        "temperature": 0.5
+    }
+
+    body = json.dumps({
+        "schemaVersion": "messages-v1",
+        "messages": messages,
+        "system": system,
+        "inferenceConfig": inf_params,
+    })
+
+    try:
+        response = bedrock_client.invoke_model(
+            modelId=MODEL_ID,
+            body=body
+        )
+
+        model_response = json.loads(response["body"].read())
+        return model_response.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+    
+    except Exception as e:
+        print("Error in Nova Lite API:", e)
+        return ""
+
+# **Step 1:** Extract text using Amazon Textract
+extracted_text = extract_text_from_image_s3(s3_bucket, s3_key)
+
+if extracted_text:
+    # **Step 2:** Get the summary
+    summary = send_request_nova(extracted_text, "summarize")
+    print("\nSummary:\n", summary)
+
+    # **Step 3:** Get the title
+    title = send_request_nova(extracted_text, "generate a suitable title for")
+    print("\nTitle:\n", title)
+else:
+    print("No text extracted from image.")

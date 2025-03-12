@@ -1,72 +1,70 @@
 import boto3
 import json
 
-def textract_parser(s3_bucket, s3_key):
-    textract = boto3.client('textract', region_name='us-east-2')
+# Initialize the S3 client
+s3_client = boto3.client("s3")
 
-    doc_type_query = [{"Text": "What is the document type closest to, is it a resume, diploma, certificate, driver's license, or other?"}]
+# Specify the bucket name and image file name
+bucket_name = "billiaitest"
+image_key = "image.png" 
 
-    response = textract.analyze_document(
-        Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}},
-        FeatureTypes=["QUERIES"],
-        QueriesConfig={"Queries": doc_type_query}
-    )
+# Generate a pre-signed URL that expires in 3600 seconds (1 hour)
+presigned_url = s3_client.generate_presigned_url(
+    "get_object",
+    Params={"Bucket": bucket_name, "Key": image_key},
+    ExpiresIn=3600,
+)
 
-    doc_type = "document" 
-    doc_type_confidence = 0.0
-    for block in response.get('Blocks', []):
-        if block.get('BlockType') == 'QUERY_RESULT':
-            print(block)
-            doc_type = block.get('Text', "").lower()
-            doc_type_confidence = block.get('Confidence', 0.0)
+print("Pre-Signed URL:", presigned_url)
 
-    # store document type and confidence
-    results = [
-        {
-            "Text": doc_type_query[0]["Text"],
-            "Answer": doc_type,
-            "Confidence": doc_type_confidence
-        }
-    ]
+client = boto3.client("bedrock-runtime", region_name="us-east-2")
 
-    # generate queries based on document type
-    queries = [
-        {"Text": f"What is the name of this {doc_type}?"},
-        {"Text": f"What is the expiration date of this {doc_type}?"},
-        {"Text": f"What state is this {doc_type} from?"},
-        {"Text": "Are there any important comments?"}
-    ]
+MODEL_ID = "us.amazon.nova-lite-v1:0"
 
-    # run textract with updated queries
-    response = textract.analyze_document(
-        Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}},
-        FeatureTypes=["QUERIES"],
-        QueriesConfig={"Queries": queries}
-    )
+system = [{ "text": "You are an AI assitant that can summarize and create names for documents." }]
 
-    # store query results
-    query_results = {query["Text"]: {"Answer": "", "Confidence": 0.0} for query in queries}
-
-    for block in response.get('Blocks', []):
-        if block.get('BlockType') == 'QUERY_RESULT':
-            question_text = queries[len(query_results) - len(queries)]["Text"]
-            query_results[question_text] = {
-                "Answer": block.get('Text', ""),
-                "Confidence": block.get('Confidence', 0.0)
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "image": {
+                    "format": "png",
+                    "source": {"url": presigned_url},
+                }
+            },
+            {
+                "text": "Please summarize the document and suggest a suitable title."
             }
+        ],
+    }
+]
 
-    # convert to json format
-    for query in queries:
-        results.append({
-            "Text": query["Text"],
-            "Answer": query_results[query["Text"]]["Answer"],
-            "Confidence": query_results[query["Text"]]["Confidence"]
-        })
+inf_params = {
+    "maxTokens": 500, 
+    "topP": 0.2, 
+    "topK": 20, 
+    "temperature": 0.5
+}
 
-    return json.dumps(results, indent=4)
+body = json.dumps({
+    "schemaVersion": "messages-v1",
+    "messages": messages,
+    "system": system,
+    "inferenceConfig": inf_params,
+})
 
-s3_bucket = "billiaitest"
-s3_key = "image.png"
+try:
+    response = client.invoke_model (
+        modelId = MODEL_ID,
+        body = body,
+        accept = "application/json",
+        contentType = "application/json"
+    )
 
-result = textract_parser(s3_bucket, s3_key)
-print(result)
+    model_response = json.loads(response["body"].read())
+
+    print(model_response)
+
+except Exception as e:
+    print("Error:", e)
