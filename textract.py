@@ -9,13 +9,13 @@ MODEL_ID = "us.amazon.nova-lite-v1:0"
 
 system = [{ "text": "You are an AI assitant that can summarize and create names for documents." }]
 
-def send_request(text_content, request_type):
+def nova_lite_parser(text_content):
     messages = [
         {
             "role": "user",
             "content": [
                 {"text": text_content},
-                {"text": f"Please {request_type} the document."}
+                {"text": f"Please summarize and generate a title for the document."}
             ],
         }
     ]
@@ -41,82 +41,77 @@ def send_request(text_content, request_type):
         )
 
         model_response = json.loads(response["body"].read())
-        return model_response.get("output").get("message").get("content")[0].get("text")
+        outputs = model_response.get("output").get("message").get("content")[0].get("text")
+        
+        parts = outputs.split("**Generated Title:**\n")
+        if len(parts) == 2:
+            summary = parts[0].replace("**Summary:**\n", "").strip()
+            title = parts[1].strip()
+        else:
+            summary = ""
+            title = ""
 
+        return summary, title
+    
     except Exception as e:
         print("Error:", e)
-        return ""
+        return "Error retrieving summary", "Error retrieving title"
 
 def textract_parser(s3_bucket, s3_key):
     textract = boto3.client('textract', region_name='us-east-2')
 
-    # Step 1: Identify Document Type
-    doc_type_query = [
-        {"Text": "What is the document type closest to, is it a resume, diploma, certificate, driver's license, or other?"}
-    ]
-
-    full_response = textract.analyze_document(
+    # get full text first
+    full_response = textract.detect_document_text(
         Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}}
     )
 
-    extracted_text = []
-    for block in full_response["Blocks"]:
-        if block["BlockType"] == "LINE":
-            extracted_text.append(block["Text"])
+    # append all text to a list
+    extracted_text = " ".join([block.get("Text") for block in full_response.get("Blocks", []) if block.get("BlockType") == "LINE"])
 
-    response = textract.analyze_document(
-        Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}},
-        FeatureTypes=["QUERIES"],
-        QueriesConfig={"Queries": doc_type_query}
-    )
-
-    doc_type = "document" 
-    doc_type_confidence = 0.0
-    for block in response.get('Blocks', []):
-        if block.get('BlockType') == 'QUERY_RESULT':
-            doc_type = block.get('Text', "").lower()
-            doc_type_confidence = block.get('Confidence', 0.0)
-
-    # Step 2: Define Queries Based on Document Type
+    # define queries for textract
     queries = [
-        {"Text": f"If the expiration date exists, extract the expiration date in MM/DD/YYYY format for this {doc_type}."},
-        {"Text": f"If a U.S. state appears in this {doc_type} document, provide either the state name or state abbreviation."},
+        {"Text": "What is the document type?"},
+        {"Text": "If the expiration date exists, extract the expiration date in MM/DD/YYYY format."},
+        {"Text": "If a U.S. state appears in this document, provide either the state name or state abbreviation."}
     ]
 
-    # Step 3: Run Textract Again with New Queries
-    response2 = textract.analyze_document(
+    # run textract based on queries
+    response = textract.analyze_document(
         Document={'S3Object': {'Bucket': s3_bucket, 'Name': s3_key}},
         FeatureTypes=["QUERIES"],
         QueriesConfig={"Queries": queries}
     )
 
-    # Step 4: Initialize Output Dictionary
+    # initialize results json format
     results = {
-        "document_type": [doc_type, doc_type_confidence],
+        "document_type": ["", "0.0"],
         "expiration_date": ["", "0.0"],
         "state": ["", "0.0"],
         "full_text": extracted_text
     }
 
-    # Step 5: Extract Query Results
-    for block in response2.get('Blocks', []):
+    # look for query results
+    for block in response.get('Blocks', []):
         if block.get('BlockType') == 'QUERY_RESULT':
-            print(block)
             extracted_value = block.get('Text', "")
             confidence = block.get('Confidence', 0.0)
 
-            if re.match(r"^\d{2}/\d{2}/\d{4}$", extracted_value): 
+            if "document type" in block.get("Query", {}).get("Text", "").lower():
+                results["document_type"] = [extracted_value, confidence]
+            elif re.match(r"^\d{2}/\d{2}/\d{4}$", extracted_value):
                 results["expiration_date"] = [extracted_value, confidence]
             elif re.match(r"^[A-Z]{2}$", extracted_value):
                 results["state"] = [extracted_value, confidence]
+
+    # call nova-lite for summary and title
+    summary, title = nova_lite_parser(extracted_text)
+    results["summary"] = summary
+    results["title"] = title
 
     return json.dumps(results, indent=4)
 
 s3_bucket = "billiaitest"
 s3_key = "diploma.jpg"
-
-summary = send_request(base64_string, "summarize")
-title = send_request(base64_string, "generate a title for")
 
 result = textract_parser(s3_bucket, s3_key)
 print(result)
