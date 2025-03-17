@@ -41,19 +41,22 @@ def nova_micro_parser(text_content):
 
         model_response = json.loads(response["body"].read())
         outputs = model_response.get("output").get("message").get("content")[0].get("text")
-
+        print("outputs:", outputs)
         parts = outputs.split("### ")
+        print("parts:", parts)
 
         summary, title, doc_type = "", "", ""
      
         for part in parts:
             if part.startswith("Summary"):
                 summary = part.replace("Summary", "").strip().lstrip(":\n")
+                print("summary:", summary)
             elif part.startswith("Title"):
-                title = part.replace("Title", "").strip().lstrip(":\n").strip("*").strip('"')
+                title = part.replace("Title", "").strip().lstrip(":\n").strip("*")
+                print("title:", title)
             elif part.startswith("Document Type"):
                 doc_type = part.replace("Document Type", "").strip().lstrip(":\n").split("\n\n")[0].strip("*")
-
+                print("doc_type:", doc_type)
 
         return summary, title, doc_type
     
@@ -74,9 +77,8 @@ def textract_parser(s3_bucket, s3_key):
 
     # define queries for textract
     queries = [
-        {"Text": "What is the document type?"},
-        {"Text": "If the expiration date exists, extract the expiration date in MM/DD/YYYY format."},
-        {"Text": "If a U.S. state appears in this document, provide either the state name or state abbreviation."}
+        {"Text": "What is the expiration date of this document?"},
+        {"Text": "What state is this document from?"}
     ]
 
     # run textract based on queries
@@ -88,8 +90,8 @@ def textract_parser(s3_bucket, s3_key):
 
     # initialize results json format
     results = {
-        "document_type": "",
         "title": "",
+        "document_type": "",
         "expiration_date": ["", "0.0"],
         "state": ["", "0.0"],
         "summary": "",
@@ -102,23 +104,21 @@ def textract_parser(s3_bucket, s3_key):
             extracted_value = block.get('Text', "")
             confidence = block.get('Confidence', 0.0)
 
-            if "document type" in block.get("Query", {}).get("Text", "").lower():
-                results["document_type"] = [extracted_value, confidence]
-            elif re.match(r"^\d{2}/\d{2}/\d{4}$", extracted_value):
+            if re.match(r"\d{2}/\d{2}/\d{4}", extracted_value):
                 results["expiration_date"] = [extracted_value, confidence]
-            elif re.match(r"^[A-Z]{2}$", extracted_value):
+            elif re.match(r"[A-Z]{2}", extracted_value) or re.match(r"[A-Z][a-z]+", extracted_value):
                 results["state"] = [extracted_value, confidence]
 
-    # call nova-lite for summary and title
+    # call nova micro for summary and title
     summary, title, doc_type = nova_micro_parser(extracted_text)
-    results["summary"] = summary
-    results["title"] = title
-    results["document_type"] = doc_type
+    results["summary"] = summary.strip('"')
+    results["title"] = title.strip('"')
+    results["document_type"] = doc_type.strip('"')
 
     return json.dumps(results, indent=4)
 
 s3_bucket = "billiaitest"
-s3_key = "diploma.jpg"
+s3_key = "image.png"
 
 result = textract_parser(s3_bucket, s3_key)
 print(result)

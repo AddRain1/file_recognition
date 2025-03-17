@@ -69,5 +69,5 @@ print("Document Type:", doc_type)
 
 # Define S3 bucket and file
 s3_bucket = "billiaitest"
-s3_key = "image.png"  # Supports PDF, JPG, PNG, etc.
+s3_key = "diploma.jpg"  # Supports PDF, JPG, PNG, etc.
 
