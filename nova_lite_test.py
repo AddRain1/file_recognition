@@ -1,6 +1,5 @@
 import boto3
 import json
-import base64
 
 client = boto3.client("bedrock-runtime", region_name="us-east-2")
 
@@ -8,13 +7,13 @@ MODEL_ID = "us.amazon.nova-lite-v1:0"
 
 system = [{ "text": "You are an AI assitant that can summarize and create names for documents." }]
 
-def send_request(text_content, request_type):
+def nova_lite_parser(text_content):
     messages = [
         {
             "role": "user",
             "content": [
                 {"text": text_content},
-                {"text": f"Please {request_type} the document."}
+                {"text": f"I want you to do 3 things: Summarize the document, generate a title for the document, and provide the document type."}
             ],
         }
     ]
@@ -40,13 +39,18 @@ def send_request(text_content, request_type):
         )
 
         model_response = json.loads(response["body"].read())
-        return model_response.get("output").get("message").get("content")[0].get("text")
+        outputs = model_response.get("output").get("message").get("content")[0].get("text")
+        print(outputs)
+        parts = outputs.split("**Generated Title:**\n")
+        if len(parts) == 2:
+            summary = parts[0].replace("**Summary:**\n", "").strip()
+            title = parts[1].strip()
+        else:
+            summary = ""
+            title = ""
 
+        return summary, title
+    
     except Exception as e:
         print("Error:", e)
-        return ""
-
-summary = send_request("summarize")
-title = send_request("generate a title for")
-print("Summary:", summary)
-print("Title:", title)
+        return "Error retrieving summary", "Error retrieving title"

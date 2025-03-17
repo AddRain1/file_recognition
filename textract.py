@@ -1,21 +1,20 @@
 import boto3
 import json
 import re
-import base64
 
 client = boto3.client("bedrock-runtime", region_name="us-east-2")
 
-MODEL_ID = "us.amazon.nova-lite-v1:0"
+MODEL_ID = "us.amazon.nova-micro-v1:0"
 
-system = [{ "text": "You are an AI assitant that can summarize and create names for documents." }]
+system = [{ "text": "You are an AI assitant that can summarize, create names for documents, and come up with the document type." }]
 
-def nova_lite_parser(text_content):
+def nova_micro_parser(text_content):
     messages = [
         {
             "role": "user",
             "content": [
                 {"text": text_content},
-                {"text": f"Please summarize and generate a title for the document."}
+                {"text": f"I want you to do 3 things: Summarize the document, generate a title for the document, and provide the document type."}
             ],
         }
     ]
@@ -42,16 +41,21 @@ def nova_lite_parser(text_content):
 
         model_response = json.loads(response["body"].read())
         outputs = model_response.get("output").get("message").get("content")[0].get("text")
-        
-        parts = outputs.split("**Generated Title:**\n")
-        if len(parts) == 2:
-            summary = parts[0].replace("**Summary:**\n", "").strip()
-            title = parts[1].strip()
-        else:
-            summary = ""
-            title = ""
 
-        return summary, title
+        parts = outputs.split("### ")
+
+        summary, title, doc_type = "", "", ""
+     
+        for part in parts:
+            if part.startswith("Summary"):
+                summary = part.replace("Summary", "").strip().lstrip(":\n")
+            elif part.startswith("Title"):
+                title = part.replace("Title", "").strip().lstrip(":\n").strip("*").strip('"')
+            elif part.startswith("Document Type"):
+                doc_type = part.replace("Document Type", "").strip().lstrip(":\n").split("\n\n")[0].strip("*")
+
+
+        return summary, title, doc_type
     
     except Exception as e:
         print("Error:", e)
@@ -84,9 +88,11 @@ def textract_parser(s3_bucket, s3_key):
 
     # initialize results json format
     results = {
-        "document_type": ["", "0.0"],
+        "document_type": "",
+        "title": "",
         "expiration_date": ["", "0.0"],
         "state": ["", "0.0"],
+        "summary": "",
         "full_text": extracted_text
     }
 
@@ -104,9 +110,10 @@ def textract_parser(s3_bucket, s3_key):
                 results["state"] = [extracted_value, confidence]
 
     # call nova-lite for summary and title
-    summary, title = nova_lite_parser(extracted_text)
+    summary, title, doc_type = nova_micro_parser(extracted_text)
     results["summary"] = summary
     results["title"] = title
+    results["document_type"] = doc_type
 
     return json.dumps(results, indent=4)
 
