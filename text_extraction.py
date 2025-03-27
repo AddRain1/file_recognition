@@ -106,20 +106,58 @@ class TextExtraction:
             DocumentLocation={"S3Object": {"Bucket": self.s3_bucket, "Name": self.s3_key}}
         )
 
+        # job_id = response["JobId"]
+
+        # while True:
+        #     response = textract.get_document_text_detection(JobId=job_id)
+        #     status = response["JobStatus"]
+        #     if status in ["SUCCEEDED", "FAILED"]:
+        #         break
+        #     time.sleep(30)
+
+        # extracted_texts = []
+        # if status == "SUCCEEDED":
+        #     for block in response["Blocks"]:
+        #         if block["BlockType"] == "LINE":
+        #             extracted_texts.append(block["Text"])
+
+
+
         job_id = response["JobId"]
+        extracted_texts = []
+        next_token = False
 
         while True:
-            response = textract.get_document_text_detection(JobId=job_id)
-            status = response["JobStatus"]
-            if status in ["SUCCEEDED", "FAILED"]:
-                break
-            time.sleep(30)
 
-        extracted_texts = []
-        if status == "SUCCEEDED":
-            for block in response["Blocks"]:
+            get_response = textract.get_document_text_detection(JobId=job_id)
+            status = get_response["JobStatus"]
+
+            if status == "FAILED":
+                print("Textract job failed")
+                break
+
+            if status == "IN_PROGRESS":
+                print("Job in progress...")
+                time.sleep(10)
+                continue
+
+            if status == "SUCCEEDED":
+                break
+
+        while True:
+            if next_token:
+                time.sleep(5)
+                get_response = textract.get_document_text_detection(JobId=job_id, NextToken=next_token)
+            
+            for block in get_response.get("Blocks", []):
                 if block["BlockType"] == "LINE":
                     extracted_texts.append(block["Text"])
+
+            next_token = get_response.get("NextToken", None)
+            print("Next Token", next_token)
+
+            if next_token is None:
+                break
 
         return " ".join(extracted_texts)
 
@@ -238,10 +276,12 @@ class TextExtraction:
 
 
 s3_bucket = "billiaitest"
-s3_key = "image.png" 
-s3_key = "DD214-Example_Redacted_0.pdf"
-s3_key = "diploma.jpg"
-s3_key = "lt11c.pdf"
+
+# s3_key = "image.png" 
+# s3_key = "DD214-Example_Redacted_0.pdf"
+# s3_key = "diploma.jpg"
+# s3_key = "lt11c.pdf"
+s3_key = "fw9.pdf"
 
 result = TextExtraction(s3_bucket, s3_key)
 print(result.nova_parser())
