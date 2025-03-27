@@ -3,6 +3,7 @@ import base64
 import json
 import time
 import re
+import concurrent.futures
 
 document_types = [
     "Application Release",
@@ -83,6 +84,7 @@ class TextExtraction:
     model_micro_id = "us.amazon.nova-micro-v1:0"
     region_name = "us-east-2"
     service_name = "bedrock-runtime"
+    max_concurrent_jobs = 5
 
     system = [
         {"text": "You are an AI assistant that provides only JSON formatted responses. Do not include any extra text, just return the JSON object."}
@@ -267,21 +269,34 @@ class TextExtraction:
             
             structured_dict["Full Text"] = text_content
             
-            return json.dumps(structured_dict, indent=4)
+            # return json.dumps(structured_dict, indent=4)
+            return structured_dict
 
 
         except Exception as e:
-            return json.dumps({"Error": f"{e}"})
+            # return json.dumps({"Error": f"{e}"})
+            return {"Error": f"{e}"}
 
+
+
+
+def parallel_processing(s3_bucket, s3_key):
+    text_extraction = TextExtraction(s3_bucket, s3_key)
+    result = text_extraction.nova_parser()
+    return json.dumps({"file": s3_key, "result": result}, indent=4)
 
 
 s3_bucket = "billiaitest"
+s3_keys = ["image.png", "DD214-Example_Redacted_0.pdf", "diploma.jpg", "lt11c.pdf", "fw9.pdf"]
 
-# s3_key = "image.png" 
-# s3_key = "DD214-Example_Redacted_0.pdf"
-# s3_key = "diploma.jpg"
-# s3_key = "lt11c.pdf"
-s3_key = "fw9.pdf"
 
-result = TextExtraction(s3_bucket, s3_key)
-print(result.nova_parser())
+results = []
+with concurrent.futures.ThreadPoolExecutor(max_workers=TextExtraction.max_concurrent_jobs) as executor:
+    future_to_files = {executor.submit(parallel_processing, s3_bucket, s3_key): s3_key for s3_key in s3_keys}
+    for future in concurrent.futures.as_completed(future_to_files):
+        results.append(future.result())
+
+
+for result in results:
+    print(result)
+    print("\n\n")
