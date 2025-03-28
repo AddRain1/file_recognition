@@ -1,32 +1,54 @@
 # file_recognition
 
 # Workflow
-The main file to run is file_recognition.py, the others are for testing.
-The s3 bucket and s3 key is defined first.
-The first function that is called is textract_parser, which takes in the s3 bucket and s3 key as paramters.
-textract_parser analyzes the document using Amazon Textract and extracts: full body text and query results.
-Based on the full body text, nova_micro_parser is called using the text as the parameter.
-It uses Amazon Nova Micro to generate the summary, title, and document type based on the text.
-The results are returned in json format to textract_parser.
-Lastly, textract_parser appends all the data to the results in json format and returns.
+
+The main file to run is file_extraction.py.
+
+An instance of the TextExtraction class is initialized with the s3 bucket and s3 key.
+If the file is an image (.png, jpeg, .jpg), the image data is encoded as base64 and
+data is extracted using Amazon Textract and Amazon Nova Lite. On the other hand,
+if the fils is a PDF, the data is extracted using Amazon Textract and Amazon Nova Micro.
+Text can be extracted from multipage documents.
+
+## Output Format
+
+```
+{
+
+    "Summary": "",
+    "Title": "",
+    "Document Type": "",
+    "Expiration Date": {
+        "value": "",
+        "confidence": 0.00
+    },
+    "State": {
+        "value": "",
+        "confidence": 0.00
+    }
+}
+```
 
 # Activate the virtual environment
+
 source .venv/Scripts/activate
 
 # Dependencies
-pillow
+
 boto3
-textract-trp
+Amazon textract
+Amazon nova-lite
+Amazon nova-micro
 
 # s3 Keys
+
 image.png
-diplomatofboardcert.jpg
-Phlebotomist-resume-1.png
 lt11c.pdf
 DD214-Example_Redacted_0.pdf
-medicarcert.png
 diploma.jpg
+fw9.pdf
 
 # Commands to find models
+
 aws bedrock list-foundation-models --region us-east-2
 aws bedrock list-inference-profiles --region us-east-2
