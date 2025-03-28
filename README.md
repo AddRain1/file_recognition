@@ -31,7 +31,9 @@ Text can be extracted from multipage documents.
 
 # Activate the virtual environment
 
+```
 source .venv/Scripts/activate
+```
 
 # Dependencies
 
