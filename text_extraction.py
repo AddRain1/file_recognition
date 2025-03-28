@@ -2,6 +2,7 @@ import boto3
 import base64
 import json
 import time
+from datetime import datetime as dt
 import re
 import concurrent.futures
 
@@ -71,11 +72,11 @@ json_format = {
     "Document Type": "",
     "Expiration Date": {
         "value": "",
-        "confidence": 0.00
+        "confidence": ""
     },
     "State": {
         "value": "",
-        "confidence": 0.00
+        "confidence": ""
     }
 }
 
@@ -263,12 +264,55 @@ class TextExtraction:
             
             structured_string =  model_response.get("output", {}).get("message", {}).get("content", {})[0].get("text", {}) if model_response else model_response
 
-            cleaned_string = self.clean_string(structured_string)
-
-            structured_dict = cleaned_string
+            structured_dict = self.clean_string(structured_string)
             
             structured_dict["Full Text"] = text_content
-            
+
+            for dict_key, dict_value in structured_dict.items():
+
+                if dict_key.lower() == "expiration date":
+
+                    if isinstance(dict_value, dict):
+                    
+                        value = dict_value.get("value", "")
+
+                        if value.startswith("[") and value.endswith("]"):
+                            value = value[1:-1]
+
+                        if value:
+                            value = self.format_date(value)
+                        
+                        dict_value["value"] = value
+
+                elif dict_key.lower() == "state":
+
+                    if isinstance(dict_value, dict):
+
+                        value = dict_value.get("value", "")
+
+                        if value.lower() in ["n/a", "na", "not applicable"]:
+                            value = ""
+
+                        dict_value["value"] = value
+
+
+                if dict_key.lower() == "expiration date" or dict_key.lower() == "state":
+
+                    if isinstance(dict_value, dict):
+                        
+                        confidence = dict_value.get("confidence", "")
+
+                        if confidence:
+                            confidence = self.confidence_format(confidence)
+
+                            value = dict_value.get("value")
+
+                            if not value:
+                                confidence = ""
+                        
+                        dict_value["confidence"] = confidence
+                        
+                
             # return json.dumps(structured_dict, indent=4)
             return structured_dict
 
@@ -276,6 +320,70 @@ class TextExtraction:
         except Exception as e:
             # return json.dumps({"Error": f"{e}"})
             return {"Error": f"{e}"}
+        
+    
+    @staticmethod
+
+    def format_date(date_str):
+        if not date_str:
+            return ""
+
+        date_str = date_str.replace(".", "/")
+
+        if re.fullmatch(r"0{2,4}[-/.]0{2}[-/.]0{2,4}", date_str):
+            return ""
+
+        if date_str.replace(" ", "").isalpha():
+            return ""
+
+        if re.fullmatch(r"\d{4}", date_str):
+            return date_str
+
+        month_year_formats = [
+            "%B %Y", "%B/%Y", "%B-%Y",  # Full month name (March 2024)
+            "%b %Y", "%b/%Y", "%b-%Y",  # Abbreviated month name (Mar 2024)
+            "%m/%Y", "%Y/%m", "%Y-%m",  # Numeric Month-Year (03/2024)
+        ]
+
+        for fmt in month_year_formats:
+            try:
+                parsed_date = dt.strptime(date_str, fmt)
+                return parsed_date.strftime("%m-%Y")
+            except ValueError:
+                pass
+
+        full_date_formats = [
+            "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d",  # ISO formats (YYYY-MM-DD)
+            "%m/%d/%Y", "%m-%d-%Y", "%m.%d.%Y",  # US format (MM/DD/YYYY)
+            "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",  # European format (DD/MM/YYYY)
+            "%Y %m %d", "%d %m %Y", "%m %d %Y",  # Spaces instead of symbols
+        ]
+
+        for fmt in full_date_formats:
+            try:
+                parsed_date = dt.strptime(date_str, fmt)
+                return parsed_date.strftime("%m-%d-%Y")
+            except ValueError:
+                pass
+
+        return date_str
+
+    @staticmethod
+    def confidence_format(conf_str):
+
+        if isinstance(conf_str, float) or isinstance(conf_str, int):
+            return float(conf_str)
+        
+        if isinstance(conf_str, str):
+            try:
+                return float(conf_str)
+            except ValueError:
+                pass
+
+        return conf_str
+
+
+
 
 
 
