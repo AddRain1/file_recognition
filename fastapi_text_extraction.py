@@ -393,4 +393,3 @@ async def batch_extract(s3_bucket: str, s3_keys: List[str] = Query(...)):
             results.append(future.result())
     return results
 
-
