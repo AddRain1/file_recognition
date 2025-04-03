@@ -1,10 +1,13 @@
+from fastapi import FastAPI, BackgroundTasks, Query
 import boto3
-import base64
-import json
-import time
-from datetime import datetime as dt
-import re
 import concurrent.futures
+import json
+import base64
+import time
+import re
+from datetime import datetime as dt
+from typing import List
+
 
 document_types = [
     "Application Release",
@@ -80,6 +83,9 @@ json_format = {
     }
 }
 
+
+app = FastAPI()
+
 class TextExtraction:
     model_lite_id = "us.amazon.nova-lite-v1:0"
     model_micro_id = "us.amazon.nova-micro-v1:0"
@@ -92,7 +98,7 @@ class TextExtraction:
     ]
     inf_params = {"maxTokens": 300, "topP": 0.2, "topK": 20, "temperature": 0.5}
 
-    def __init__(self, s3_bucket, s3_key):
+    def __init__(self, s3_bucket: str, s3_key: str):
         self.s3_bucket = s3_bucket
         self.s3_key = s3_key
 
@@ -148,7 +154,7 @@ class TextExtraction:
         return " ".join(extracted_texts)
 
     @staticmethod
-    def clean_string(string):
+    def clean_string(string: str):
         try:
             if not isinstance(string, str):
                 raise ValueError("Input must be a string")
@@ -307,7 +313,7 @@ class TextExtraction:
     
     @staticmethod
 
-    def format_date(date_str):
+    def format_date(date_str: str):
         if not date_str:
             return ""
 
@@ -352,7 +358,7 @@ class TextExtraction:
         return date_str
 
     @staticmethod
-    def confidence_format(conf_str):
+    def confidence_format(conf_str: str):
 
         if isinstance(conf_str, float) or isinstance(conf_str, int):
             return float(conf_str)
@@ -367,27 +373,24 @@ class TextExtraction:
 
 
 
-
-
-
-
-def parallel_processing(s3_bucket, s3_key):
+def parallel_processing(s3_bucket: str, s3_key: str):
     text_extraction = TextExtraction(s3_bucket, s3_key)
     result = text_extraction.nova_parser()
-    return json.dumps({"file": s3_key, "result": result}, indent=4)
+    return {"file": s3_key, "result": result}
 
 
-s3_bucket = "billiaitest"
-s3_keys = ["image.png", "DD214-Example_Redacted_0.pdf", "diploma.jpg", "lt11c.pdf", "fw9.pdf"]
+@app.get("/extract")
+async def extract_text(s3_bucket: str, s3_key: str):
+    result = parallel_processing(s3_bucket, s3_key)
+    return result
+
+@app.get("/batch_extract")
+async def batch_extract(s3_bucket: str, s3_keys: List[str] = Query(...)):
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=TextExtraction.max_concurrent_jobs) as executor:
+        future_to_files = {executor.submit(parallel_processing, s3_bucket, s3_key): s3_key for s3_key in s3_keys}
+        for future in concurrent.futures.as_completed(future_to_files):
+            results.append(future.result())
+    return results
 
 
-results = []
-with concurrent.futures.ThreadPoolExecutor(max_workers=TextExtraction.max_concurrent_jobs) as executor:
-    future_to_files = {executor.submit(parallel_processing, s3_bucket, s3_key): s3_key for s3_key in s3_keys}
-    for future in concurrent.futures.as_completed(future_to_files):
-        results.append(future.result())
-
-
-for result in results:
-    print(result)
-    print("\n\n")
