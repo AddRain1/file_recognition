@@ -5,6 +5,10 @@ import time
 from datetime import datetime as dt
 import re
 import concurrent.futures
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 document_types = [
     "Application Release",
@@ -104,62 +108,54 @@ class TextExtraction:
         return response["Body"].read()
     
     def textract_parser(self):
-        textract = boto3.client("textract", region_name=TextExtraction.region_name)
-        response = textract.start_document_text_detection(
-            DocumentLocation={"S3Object": {"Bucket": self.s3_bucket, "Name": self.s3_key}}
-        )
+        try:
+            textract = boto3.client("textract", region_name=TextExtraction.region_name)
+            response = textract.start_document_text_detection(
+                DocumentLocation={"S3Object": {"Bucket": self.s3_bucket, "Name": self.s3_key}}
+            )
 
-        # job_id = response["JobId"]
+            job_id = response["JobId"]
+            self._wait_for_textract_job(textract, job_id)
+            return self._get_textract_results(textract, job_id)
 
-        # while True:
-        #     response = textract.get_document_text_detection(JobId=job_id)
-        #     status = response["JobStatus"]
-        #     if status in ["SUCCEEDED", "FAILED"]:
-        #         break
-        #     time.sleep(30)
+        except boto3.exceptions.Boto3Error as e:
+            logger.error(f"Error with Textract: {e}")
+            return ""
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            return ""
 
-        # extracted_texts = []
-        # if status == "SUCCEEDED":
-        #     for block in response["Blocks"]:
-        #         if block["BlockType"] == "LINE":
-        #             extracted_texts.append(block["Text"])
-
-
-
-        job_id = response["JobId"]
-        extracted_texts = []
-        next_token = False
-
+    def _wait_for_textract_job(self, textract, job_id):
         while True:
-
-            get_response = textract.get_document_text_detection(JobId=job_id)
-            status = get_response["JobStatus"]
+            response = textract.get_document_text_detection(JobId=job_id)
+            status = response["JobStatus"]
 
             if status == "FAILED":
-                print("Textract job failed")
+                logger.error("Textract job failed")
+                raise RuntimeError("Textract job failed")
+            elif status == "SUCCEEDED":
+                logger.info("Textract job succeeded")
                 break
 
-            if status == "IN_PROGRESS":
-                print("Job in progress...")
-                time.sleep(10)
-                continue
+            logger.info("Job in progress...")
+            time.sleep(2)
 
-            if status == "SUCCEEDED":
-                break
+    def _get_textract_results(self, textract, job_id):
+        extracted_texts = []
+        next_token = None
 
         while True:
+            params = {"JobId": job_id}
             if next_token:
-                time.sleep(5)
-                get_response = textract.get_document_text_detection(JobId=job_id, NextToken=next_token)
-            
-            for block in get_response.get("Blocks", []):
+                params["NextToken"] = next_token
+
+            response = textract.get_document_text_detection(**params)
+            for block in response.get("Blocks", []):
                 if block["BlockType"] == "LINE":
                     extracted_texts.append(block["Text"])
 
-            next_token = get_response.get("NextToken", None)
-            print("Next Token", next_token)
-
-            if next_token is None:
+            next_token = response.get("NextToken")
+            if not next_token:
                 break
 
         return " ".join(extracted_texts)
@@ -394,17 +390,38 @@ def parallel_processing(s3_bucket, s3_key):
     return json.dumps({"file": s3_key, "result": result}, indent=4)
 
 
+def process_files_in_parallel(s3_bucket, s3_keys):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=TextExtraction.max_concurrent_jobs) as executor:
+        future_to_key = {executor.submit(parallel_processing, s3_bucket, key): key for key in s3_keys}
+        for future in concurrent.futures.as_completed(future_to_key):
+            try:
+                result = future.result()
+                print(result)
+            except Exception as e:
+                logger.error(f"Error processing file {future_to_key[future]}: {e}")
+
+
 s3_bucket = "billiaitest"
-s3_keys = ["image.png", "DD214-Example_Redacted_0.pdf", "diploma.jpg", "lt11c.pdf", "fw9.pdf"]
+s3_keys = ["TherapeuticDiagnostic Pharmaceutical Agents License.pdf", 
+            "Form C - Liability Insurance.pdf",
+            "Social Security Number.jpg",
+            "CPR Card.png",
+            "Letter of Self Insurance.pdf",
+            "TB Skin Test.jpg",
+            "DEA Waiver.pdf",
+            "CME Certification.pdf",
+            "TherapeuticDiagnostic Pharmaceutical Agents License.pdf" 
+]
 
+"""
+Form C - Liability Insurance.pdf
+Social Security Number.jpg
+CPR Card.png
+Letter of Self Insurance.pdf
+TB Skin Test.jpg
+DEA Waiver.pdf
+CME Certification.pdf
+TherapeuticDiagnostic Pharmaceutical Agents License.pdf
+"""
 
-results = []
-with concurrent.futures.ThreadPoolExecutor(max_workers=TextExtraction.max_concurrent_jobs) as executor:
-    future_to_files = {executor.submit(parallel_processing, s3_bucket, s3_key): s3_key for s3_key in s3_keys}
-    for future in concurrent.futures.as_completed(future_to_files):
-        results.append(future.result())
-
-
-for result in results:
-    print(result)
-    print("\n\n")
+process_files_in_parallel(s3_bucket, s3_keys)

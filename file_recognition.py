@@ -106,7 +106,7 @@ def textract_parser(s3_bucket, s3_key):
     return json.dumps(results, indent=4)
 
 s3_bucket = "billiaitest"
-s3_key = "image.png"  # replace with the key of the document you want to analyze
+s3_key = "CPR Card.png"  # replace with the key of the document you want to analyze
 # s3_key = "DD214-Example_Redacted_0.pdf"
 
 result = textract_parser(s3_bucket, s3_key)
