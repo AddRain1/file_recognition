@@ -257,6 +257,9 @@ class TextExtraction:
             
             structured_dict["Full Text"] = text_content
 
+            if structured_dict.get("Summary", "") == "" and structured_dict.get("Title", "") != "":
+                structured_dict["Summary"] = structured_dict.get("Title")
+
             for dict_key, dict_value in structured_dict.items():
 
                 if dict_key.lower() == "expiration date":
