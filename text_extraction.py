@@ -5,6 +5,10 @@ import time
 from datetime import datetime as dt
 import re
 import concurrent.futures
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 document_types = [
     "Application Release",
@@ -105,44 +109,51 @@ class TextExtraction:
     
     def textract_parser(self):
         textract = boto3.client("textract", region_name=TextExtraction.region_name)
+        job_id = self._start_textract_job(textract)
+        self._wait_for_textract_job(textract, job_id)
+        return self._get_textract_results(textract, job_id)
+
+    def _start_textract_job(self, textract):
         response = textract.start_document_text_detection(
             DocumentLocation={"S3Object": {"Bucket": self.s3_bucket, "Name": self.s3_key}}
         )
+        return response["JobId"]
 
-        job_id = response["JobId"]
-        extracted_texts = []
-        next_token = False
+    def _wait_for_textract_job(self, textract, job_id):
+        polling_interval = 2  # Start with 2 seconds
+        max_interval = 10
 
         while True:
-
-            get_response = textract.get_document_text_detection(JobId=job_id)
-            status = get_response["JobStatus"]
+            response = textract.get_document_text_detection(JobId=job_id)
+            status = response["JobStatus"]
 
             if status == "FAILED":
-                print("Textract job failed")
+                logger.error("Textract job failed")
+                raise RuntimeError("Textract job failed")
+            elif status == "SUCCEEDED":
+                logger.info("Textract job succeeded")
                 break
 
-            if status == "IN_PROGRESS":
-                print("Job in progress...")
-                time.sleep(10)
-                continue
+            logger.info("Job in progress...")
+            time.sleep(polling_interval)
+            polling_interval = min(polling_interval + 2, max_interval)  # Gradually increase interval
 
-            if status == "SUCCEEDED":
-                break
+    def _get_textract_results(self, textract, job_id):
+        extracted_texts = []
+        next_token = None
 
         while True:
+            params = {"JobId": job_id}
             if next_token:
-                time.sleep(5)
-                get_response = textract.get_document_text_detection(JobId=job_id, NextToken=next_token)
-            
-            for block in get_response.get("Blocks", []):
+                params["NextToken"] = next_token
+
+            response = textract.get_document_text_detection(**params)
+            for block in response.get("Blocks", []):
                 if block["BlockType"] == "LINE":
                     extracted_texts.append(block["Text"])
 
-            next_token = get_response.get("NextToken", None)
-            print("Next Token", next_token)
-
-            if next_token is None:
+            next_token = response.get("NextToken")
+            if not next_token:
                 break
 
         return " ".join(extracted_texts)
@@ -171,7 +182,6 @@ class TextExtraction:
             return string 
     
     def nova_parser(self):
-
         text_content = None
 
         if self.s3_key.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -251,6 +261,10 @@ class TextExtraction:
             
             structured_dict["Full Text"] = text_content
 
+            # Insert the logic to set Summary to Title if Summary is empty
+            if structured_dict.get("Summary", "") == "" and structured_dict.get("Title", "") != "":
+                structured_dict["Summary"] = structured_dict.get("Title")
+
             for dict_key, dict_value in structured_dict.items():
 
                 if dict_key.lower() == "expiration date":
@@ -279,31 +293,26 @@ class TextExtraction:
                         dict_value["value"] = value
 
 
-                if dict_key.lower() == "expiration date" or dict_key.lower() == "state":
+                    if dict_key.lower() == "expiration date" or dict_key.lower() == "state":
 
-                    if isinstance(dict_value, dict):
+                        if isinstance(dict_value, dict):
+                            
+                            confidence = dict_value.get("confidence", "")
+
+                            if confidence:
+                                confidence = self.confidence_format(confidence)
+
+                                value = dict_value.get("value")
+
+                                if not value:
+                                    confidence = ""
+                            
+                            dict_value["confidence"] = confidence
                         
-                        confidence = dict_value.get("confidence", "")
-
-                        if confidence:
-                            confidence = self.confidence_format(confidence)
-
-                            value = dict_value.get("value")
-
-                            if not value:
-                                confidence = ""
-                        
-                        dict_value["confidence"] = confidence
-                        
-                
-            # return json.dumps(structured_dict, indent=4)
             return structured_dict
 
-
         except Exception as e:
-            # return json.dumps({"Error": f"{e}"})
             return {"Error": f"{e}"}
-        
     
     @staticmethod
 
@@ -365,28 +374,28 @@ class TextExtraction:
 
         return conf_str
 
-
-
-
-
-
-
 def parallel_processing(s3_bucket, s3_key):
     text_extraction = TextExtraction(s3_bucket, s3_key)
     result = text_extraction.nova_parser()
     return json.dumps({"file": s3_key, "result": result}, indent=4)
 
-
 s3_bucket = "billiaitest"
-s3_keys = ["image.png", "DD214-Example_Redacted_0.pdf", "diploma.jpg", "lt11c.pdf", "fw9.pdf"]
-
+s3_keys = ["TherapeuticDiagnostic Pharmaceutical Agents License.pdf", 
+             "Form C - Liability Insurance.pdf",
+             "Social Security Number.jpg",
+             "CPR Card.png",
+             "Letter of Self Insurance.pdf",
+             "TB Skin Test.jpg",
+             "DEA Waiver.pdf",
+             "CME Certification.pdf",
+             "TherapeuticDiagnostic Pharmaceutical Agents License.pdf" 
+ ]
 
 results = []
 with concurrent.futures.ThreadPoolExecutor(max_workers=TextExtraction.max_concurrent_jobs) as executor:
     future_to_files = {executor.submit(parallel_processing, s3_bucket, s3_key): s3_key for s3_key in s3_keys}
     for future in concurrent.futures.as_completed(future_to_files):
         results.append(future.result())
-
 
 for result in results:
     print(result)
